@@ -60,10 +60,10 @@ func (h *webhook) Handle(_ context.Context, req admission.Request) admission.Res
 		klog.Warningf(template+" - Denying admission as pod has no containers", pod.Namespace, pod.Name, pod.UID)
 		return admission.Denied("pod has no containers")
 	}
-	if pod.Spec.SchedulerName != "" &&
-		pod.Spec.SchedulerName != corev1.DefaultSchedulerName || !config.ForceOverwriteDefaultScheduler &&
-		(len(config.SchedulerName) == 0 || pod.Spec.SchedulerName != config.SchedulerName) {
-		klog.Infof(template+" - Pod already has different scheduler assigned", req.Namespace, req.Name, req.UID)
+	// Allow HAMi to intercept Volcano scheduler pods
+	const volcanoSchedulerName = "volcano"
+	if pod.Spec.SchedulerName != "" && pod.Spec.SchedulerName != corev1.DefaultSchedulerName && pod.Spec.SchedulerName != volcanoSchedulerName || !config.ForceOverwriteDefaultScheduler && (len(config.SchedulerName) == 0 || pod.Spec.SchedulerName != config.SchedulerName) {
+		klog.Infof(template+" - Pod already has different scheduler assigned (not volcano)", req.Namespace, req.Name, req.UID)
 		return admission.Allowed("pod already has different scheduler assigned")
 	}
 	klog.Infof(template, pod.Namespace, pod.Name, pod.UID)
