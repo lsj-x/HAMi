@@ -385,16 +385,48 @@ func (cc ClusterManagerCollector) collectContainerMetrics(ch chan<- prometheus.M
 	// Iterate through each device
 	for i := range c.Info.DeviceNum() {
 		uuid := c.Info.DeviceUUID(i)
+		klog.Infof("DEBUG: Raw UUID from device %d in Pod %s/%s, Container %s: length=%d, raw=[%v], hex=[%x], string=[%q]",
+			i, pod.Namespace, pod.Name, ctr.Name, len(uuid), []byte(uuid), []byte(uuid), uuid)
+
+		// 1. 基本长度检查（保留原有逻辑）
 		if len(uuid) < 40 {
-			klog.Errorf("Invalid UUID length for device %d in Pod %s/%s, Container %s", i, pod.Namespace, pod.Name, ctr.Name)
-			return fmt.Errorf("invalid UUID length for device %d", i)
-		}
-		uuid = uuid[0:40] // Ensure UUID is truncated to 40 characters
-		if !utf8.ValidString(uuid) {
-			klog.Warningf("Device %d in Pod %s/%s, Container %s has invalid UTF-8 UUID (shared memory not yet initialised); skipping until next scrape", i, pod.Namespace, pod.Name, ctr.Name)
-			continue
+			klog.Errorf("Invalid UUID length for device %d in Pod %s/%s, Container %s: length=%d", i, pod.Namespace, pod.Name, ctr.Name, len(uuid))
+			return fmt.Errorf("invalid UUID length for device %d, got %d bytes", i, len(uuid))
 		}
 
+		// 2. 优先匹配标准格式：UTF-8 合法、以 "GPU-" 开头、且长度 == 40
+		if utf8.ValidString(uuid) && strings.HasPrefix(uuid, "GPU-") && len(uuid) == 40 {
+			// 已经是完美格式，无需处理
+			klog.V(5).Infof("UUID is already a valid standard string: %s", uuid)
+		} else {
+			// 3. 否则尝试从原始字节中提取 "GPU-" 之后的 UUID
+			idx := strings.Index(uuid, "GPU-")
+			if idx == -1 {
+				klog.Warningf("Device %d in Pod %s/%s, Container %s: No 'GPU-' marker found in raw UUID (length=%d), skipping",
+					i, pod.Namespace, pod.Name, ctr.Name, len(uuid))
+				continue
+			}
+			end := idx + 40
+			if end > len(uuid) {
+				end = len(uuid)
+			}
+			extracted := uuid[idx:end]
+			// 4. 提取结果必须同样满足长度 40 + UTF-8 合法
+			if len(extracted) != 40 || !utf8.ValidString(extracted) {
+				klog.Warningf("Device %d in Pod %s/%s, Container %s: Extracted UUID is invalid (length=%d, validUTF8=%t): %q, skipping",
+					i, pod.Namespace, pod.Name, ctr.Name, len(extracted), utf8.ValidString(extracted), extracted)
+				continue
+			}
+			uuid = extracted
+			klog.Infof("DEBUG: Successfully extracted UUID from offset %d: [%s]", idx, uuid)
+		}
+
+		// 5. 最终安全兜底：确保即将使用的 uuid 是合法 UTF-8（行 417 附近的逻辑）
+		if !utf8.ValidString(uuid) {
+			klog.Errorf("Device %d in Pod %s/%s, Container %s: Final UUID is not valid UTF-8: length=%d, hex=[%x], string=[%q]",
+				i, pod.Namespace, pod.Name, ctr.Name, len(uuid), []byte(uuid), uuid)
+			continue
+		}
 		// Collect device metrics
 		memoryTotal := c.Info.DeviceMemoryTotal(i)
 		memoryLimit := c.Info.DeviceMemoryLimit(i)
